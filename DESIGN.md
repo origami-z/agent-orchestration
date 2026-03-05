@@ -128,9 +128,13 @@ The orchestrator skill (`/orchestrate`) launches:
 
 GitHub Copilot uses:
 - **`.github/copilot-instructions.md`** for workspace-level instructions
+- **`/fleet` command** for parallel subagent execution (GA in Copilot CLI since Feb 2026)
 - The same scripts and config as Claude Code
-- Copilot doesn't have native subagent support, so the workflow is sequential:
-  the agent works through each step itself, using the scripts for heavy lifting
+
+The `/fleet` command enables the same parallel verification pattern as Claude Code's
+`Agent` tool. When verifying consumers, the orchestrator prompts `/fleet` to spin up
+one subagent per consumer app, each running `consumer-update.mjs` independently.
+Subagents have their own context windows and report results back to the orchestrator.
 
 Both platforms share the same:
 - `orchestration.config.json` configuration
@@ -247,15 +251,27 @@ where the fix belongs.
 > /verdaccio stop
 ```
 
-### GitHub Copilot
+### GitHub Copilot (CLI)
 
-In VS Code with Copilot agent mode, open a terminal in the orchestration repo and ask:
+```bash
+# Start the orchestration workflow
+copilot "Update the Button component to support a loading prop and verify across consumers"
+
+# Use /fleet explicitly for parallel consumer verification
+/fleet Verify all consumer apps against the locally published library version.
+  For each consumer in orchestration.config.json, run:
+  node scripts/consumer-update.mjs <consumer-name>
+```
+
+### GitHub Copilot (VS Code)
+
+In VS Code with Copilot agent mode:
 ```
 @workspace Update the Button component to support a "loading" prop and verify
 it works in all consumer apps
 ```
 
-Copilot will follow `.github/copilot-instructions.md` to execute the workflow.
+Both environments follow `.github/copilot-instructions.md` for the workflow.
 
 ## Adding a New Consumer App
 

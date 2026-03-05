@@ -41,16 +41,27 @@ node scripts/verdaccio-publish.mjs
 ```
 
 ### 4. Verify Consumer Apps
-For each consumer app:
-```bash
-node scripts/consumer-update.mjs <consumer-name>
+Use `/fleet` to verify all consumer apps **in parallel**. Each consumer verification
+is independent and should run as a separate subagent:
+
 ```
-This installs the new version and runs build + test + lint.
+/fleet Verify all consumer apps against the locally published library version.
+For each consumer defined in orchestration.config.json, run:
+  node scripts/consumer-update.mjs <consumer-name>
+Then read .results-<consumer-name>.json and report pass/fail.
+```
+
+If `/fleet` is not available, run them sequentially:
+```bash
+node scripts/consumer-update.mjs app-one
+node scripts/consumer-update.mjs app-two
+```
 
 ### 5. Iterate on Failures
 - Read `.results-<name>.json` for failure details
 - Fix issues in the library or consumer app as appropriate
 - Re-publish and re-verify (max 5 iterations)
+- Use `/fleet` to parallelize consumer fixes when they are independent of each other
 
 ### 6. Report Results
 Summarize what changed and whether all consumers pass.
