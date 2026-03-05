@@ -21,12 +21,12 @@ can automate this loop across repositories.
 │                    ORCHESTRATOR AGENT                        │
 │              (Claude Code or GitHub Copilot)                 │
 │                                                             │
-│  Reads: orchestration.config.json                           │
 │  Skills: /verdaccio, /orchestrate                           │
+│  Auto-detects: paths, package managers, verify steps        │
 │                                                             │
 │  ┌──────────┐  ┌──────────────┐  ┌───────────────────────┐ │
 │  │  Phase 1  │→│   Phase 2    │→│       Phase 3          │ │
-│  │ Explore & │  │ Library      │  │  Verdaccio Publish    │ │
+│  │ Resolve & │  │ Library      │  │  Verdaccio Publish    │ │
 │  │ Clarify   │  │ Subagent     │  │  (scripts/)           │ │
 │  └──────────┘  └──────────────┘  └───────────────────────┘ │
 │                                           │                  │
@@ -50,13 +50,31 @@ can automate this loop across repositories.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Design Principles
+
+### Convention Over Configuration
+
+Instead of requiring a static `orchestration.config.json`, the system infers settings at runtime:
+
+1. **Package manager** — detected from lockfiles (`pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, else npm)
+2. **Build/test/lint commands** — detected from `package.json` `scripts` section
+3. **Library identity** — read from `package.json` `name` field
+4. **Consumer discovery** — scan sibling directories for projects that depend on the library
+5. **Verdaccio settings** — sensible defaults (port 4873, storage `/tmp/verdaccio-storage`)
+
+The skills prompt the user interactively when something cannot be inferred.
+
+### Optional Configuration Fallback
+
+If an `orchestration.config.json` exists, the scripts accept it via `--config` flag (legacy mode).
+This allows existing setups to keep working, but new usage doesn't require any config file.
+
 ## File Structure
 
 ```
 agent-orchestration/
 ├── CLAUDE.md                          # Claude Code agent instructions
 ├── DESIGN.md                          # This document
-├── orchestration.config.json          # Central configuration
 ├── .claude/
 │   └── skills/
 │       ├── verdaccio.md               # /verdaccio skill definition
@@ -70,76 +88,34 @@ agent-orchestration/
     └── consumer-update.mjs            # Update + verify a consumer app
 ```
 
-## Configuration Schema
+## Script Interface
 
-`orchestration.config.json` is the single source of truth:
+### verdaccio-publish.mjs
 
-```jsonc
-{
-  "library": {
-    "name": "@myorg/components",     // npm package name
-    "path": "../component-library",  // relative path from this repo
-    "buildCommand": "npm run build",
-    "testCommand": "npm test",
-    "lintCommand": "npm run lint",
-    "packageManager": "npm"          // npm or pnpm
-  },
-  "consumers": [
-    {
-      "name": "app-one",              // identifier for scripts
-      "path": "../app-one",           // relative path from this repo
-      "packageManager": "npm",
-      "installCommand": "npm install",
-      "buildCommand": "npm run build",
-      "testCommand": "npm test",
-      "lintCommand": "npm run lint",
-      "dependencyName": "@myorg/components"
-    }
-    // ... more consumers
-  ],
-  "verdaccio": {
-    "port": 4873,
-    "storage": "/tmp/verdaccio-storage",
-    "url": "http://localhost:4873"
-  },
-  "orchestration": {
-    "maxIterations": 5,
-    "verifySteps": ["build", "test", "lint"],
-    "allowConsumerFixes": true
-  }
-}
+```
+node verdaccio-publish.mjs --library <path> [--port <port>]
 ```
 
-## Cross-Platform Support
+- Auto-detects package manager from lockfile
+- Auto-detects build command from `package.json`
+- Starts Verdaccio if not running
+- Bumps version with `-local.<timestamp>` tag
+- Publishes to local registry
+- Writes version to `.local-version`
 
-### Claude Code
+### consumer-update.mjs
 
-Claude Code uses:
-- **CLAUDE.md** at repo root for agent instructions and workflow documentation
-- **Custom skills** in `.claude/skills/` for invocable commands (`/verdaccio`, `/orchestrate`)
-- **Subagents** via the `Agent` tool for parallelized work in separate repos
+```
+node consumer-update.mjs --consumer <path> --library-name <name> [--port <port>] [--steps build,test]
+```
 
-The orchestrator skill (`/orchestrate`) launches:
-1. A **library subagent** — works in the component library to implement changes
-2. **Consumer subagents** (in parallel) — each verifies one consumer app
-3. Iteration is managed by the orchestrator reading result files
-
-### GitHub Copilot
-
-GitHub Copilot uses:
-- **`.github/copilot-instructions.md`** for workspace-level instructions
-- **`/fleet` command** for parallel subagent execution (GA in Copilot CLI since Feb 2026)
-- The same scripts and config as Claude Code
-
-The `/fleet` command enables the same parallel verification pattern as Claude Code's
-`Agent` tool. When verifying consumers, the orchestrator prompts `/fleet` to spin up
-one subagent per consumer app, each running `consumer-update.mjs` independently.
-Subagents have their own context windows and report results back to the orchestrator.
-
-Both platforms share the same:
-- `orchestration.config.json` configuration
-- Shell/Node scripts for Verdaccio and consumer management
-- Overall workflow structure
+- Auto-detects package manager from lockfile
+- Auto-detects verify steps from `package.json` scripts (build, test, lint)
+- Points consumer at Verdaccio via temporary `.npmrc`
+- Installs the local library version
+- Runs detected verify steps
+- Writes results to `.results-<name>.json`
+- Restores original `.npmrc` on completion
 
 ## Verdaccio Integration
 
@@ -169,6 +145,28 @@ Consumer apps temporarily point at Verdaccio during verification:
 2. The library package is installed from Verdaccio
 3. All other packages are proxied to npmjs.org by Verdaccio
 4. After verification, `.npmrc` is restored from backup
+
+## Defaults
+
+| Setting | Default | How to Override |
+|---------|---------|-----------------|
+| Verdaccio port | 4873 | `--port` flag on scripts, `--verdaccio-port` on skill |
+| Verdaccio storage | `/tmp/verdaccio-storage` | — |
+| Max iterations | 5 | `--max-iterations` on skill |
+| Verify steps | auto-detect from `package.json` | `--steps` flag on consumer-update |
+| Package manager | auto-detect from lockfile | — |
+
+## Cross-Platform Support
+
+### Claude Code
+
+Uses `.claude/skills/` for `/verdaccio` and `/orchestrate` commands, and subagents for parallel work.
+
+### GitHub Copilot
+
+Uses `.github/copilot-instructions.md` for workflow guidance and `/fleet` for parallel consumer verification.
+
+Both platforms share the same scripts and auto-detection logic.
 
 ## Iteration Loop
 
@@ -212,73 +210,6 @@ When a consumer fails:
 3. **Lint errors** → usually a consumer-side fix
 4. **Test assertion failures** → could be either; analyze the specific failure
 5. **Build config errors** → usually a consumer-side fix
-
-The orchestrator (or its subagents) should analyze error output to determine
-where the fix belongs.
-
-## Subagent Design (Claude Code)
-
-### Library Subagent
-- **Working directory**: library repo path
-- **Task**: implement specific changes, run build + tests
-- **Scope**: only modifies library code
-- **Reports**: files changed, build/test results
-
-### Consumer Subagent (one per app)
-- **Working directory**: consumer app path
-- **Task**: run consumer-update script, fix issues if verification fails
-- **Scope**: only modifies that consumer's code
-- **Reports**: pass/fail per verification step, error details if failed
-- **Can run in parallel** with other consumer subagents
-
-### Orchestrator
-- **Working directory**: this repo (agent-orchestration)
-- **Coordinates**: launches subagents, reads results, decides next action
-- **Maintains state**: iteration count, which consumers passed/failed
-- **Does not modify** library or consumer code directly
-
-## Usage Examples
-
-### Claude Code
-
-```
-# Start the full orchestration
-> /orchestrate
-
-# Just manage Verdaccio
-> /verdaccio start
-> /verdaccio publish
-> /verdaccio stop
-```
-
-### GitHub Copilot (CLI)
-
-```bash
-# Start the orchestration workflow
-copilot "Update the Button component to support a loading prop and verify across consumers"
-
-# Use /fleet explicitly for parallel consumer verification
-/fleet Verify all consumer apps against the locally published library version.
-  For each consumer in orchestration.config.json, run:
-  node scripts/consumer-update.mjs <consumer-name>
-```
-
-### GitHub Copilot (VS Code)
-
-In VS Code with Copilot agent mode:
-```
-@workspace Update the Button component to support a "loading" prop and verify
-it works in all consumer apps
-```
-
-Both environments follow `.github/copilot-instructions.md` for the workflow.
-
-## Adding a New Consumer App
-
-1. Edit `orchestration.config.json` and add a new entry to the `consumers` array
-2. Ensure the consumer repo exists as a sibling directory
-3. The consumer must have the library listed as a dependency
-4. Provide the correct package manager and commands
 
 ## Security Considerations
 
