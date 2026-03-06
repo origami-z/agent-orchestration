@@ -10,9 +10,10 @@ changes across multiple consumer apps using a local Verdaccio registry.
 
 ## Quick Start
 
-1. **Configure** — edit `orchestration.config.json` with your library and consumer app details
-2. **Run** — invoke `/orchestrate` (Claude Code) or ask Copilot to follow the workflow
-3. **Iterate** — the agent publishes locally, verifies consumers, and fixes issues automatically
+1. **Run** — invoke `/orchestrate` (Claude Code) or ask Copilot to follow the workflow
+2. The agent will ask for your library and consumer app paths (or auto-detect them from sibling directories)
+3. Build, test, and lint commands are inferred from each project's `package.json`
+4. The agent publishes locally, verifies consumers, and fixes issues automatically
 
 ## How It Works
 
